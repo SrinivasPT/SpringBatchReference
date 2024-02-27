@@ -53,10 +53,11 @@ GO
 
 SELECT COUNT(*) FROM dbo.VW_EmployeeRecord
 SELECT * FROM dbo.VW_EmployeeRecord
-SELECT * FROM VW_EmployeeRecord
-
--- ALTER TABLE Employee ADD JsonString VARCHAR(4000);
-
-SELECT JOB_INSTANCE_ID, JOB_NAME from BATCH_JOB_INSTANCE
+SELECT * FROM Address
 SELECT * FROM Employee ORDER BY id DESC -- 42326
 SELECT * FROM Address WHERE EmployeeId = 45325
+
+UPDATE Employee SET JsonString = null;
+SELECT * FROM Employee WHERE JsonString IS NULL
+SELECT * FROM Employee ORDER BY Id DESC
+SELECT * FROM Address WHERE EmployeeId = SELECT * FROM Employee ORDER BY Id DESC
