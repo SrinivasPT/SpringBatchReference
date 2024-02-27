@@ -198,3 +198,99 @@ The RangePartitioner is configured to split the dataset into partitions based on
 The masterStep uses the partitioner to generate partitions and the TaskExecutorPartitionHandler to manage parallel processing of these partitions.
 The workerStep is configured to actually process the data. It would typically involve reading items, processing them, and writing the results. The itemReader is scoped to the step so it can access the partition-specific context (e.g., minId and maxId) for fetching the data.
 This is a basic example to demonstrate how partitioning works in Spring Batch. Depending on your specific requirements, you might need to adapt the partitioner logic, as well as the job and step configurations.
+----------------------------
+
+When using a JdbcCursorItemReader in a partitioned step within Spring Batch, the partitioning logic typically involves dividing the dataset into discrete segments that can be processed independently and in parallel by each partition. To achieve this with JdbcCursorItemReader, you'll need to configure the reader to only process a specific segment of the data for each partition. This often involves parameterizing the SQL query used by the reader based on the partition's context.
+
+Here's a step-by-step guide on how to set it up:
+
+Step 1: Configure the Partitioner
+First, define a partitioner that determines how the data will be split. The partitioner creates execution contexts for each partition, each with its own specific parameters that define the segment of data to be processed. In this example, we'll partition the data based on a range of IDs.
+
+java
+Copy code
+import org.springframework.batch.core.partition.support.Partitioner;
+import org.springframework.batch.item.ExecutionContext;
+import java.util.HashMap;
+import java.util.Map;
+
+public class RangePartitioner implements Partitioner {
+    private final int minId;
+    private final int maxId;
+    private final int partitionSize;
+
+    public RangePartitioner(int minId, int maxId, int partitionSize) {
+        this.minId = minId;
+        this.maxId = maxId;
+        this.partitionSize = partitionSize;
+    }
+
+    @Override
+    public Map<String, ExecutionContext> partition(int gridSize) {
+        Map<String, ExecutionContext> partitions = new HashMap<>();
+        int start = minId;
+        int end = start + partitionSize - 1;
+
+        for (int i = 0; start <= maxId; i++) {
+            ExecutionContext context = new ExecutionContext();
+            context.putInt("minId", start);
+            context.putInt("maxId", end);
+
+            partitions.put("partition" + i, context);
+
+            start += partitionSize;
+            end = start + partitionSize - 1;
+        }
+
+        return partitions;
+    }
+}
+Step 2: Configure the JdbcCursorItemReader with Step Scope
+Configure your JdbcCursorItemReader to be step-scoped and to use the execution context parameters (e.g., minId and maxId) to limit the query to the appropriate segment of data.
+
+java
+Copy code
+import org.springframework.batch.item.database.JdbcCursorItemReader;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Scope;
+import javax.sql.DataSource;
+
+@Bean
+@Scope(value = "step")
+public JdbcCursorItemReader<MyEntity> itemReader(DataSource dataSource,
+                                                  @Value("#{stepExecutionContext['minId']}") Integer minId,
+                                                  @Value("#{stepExecutionContext['maxId']}") Integer maxId) {
+    JdbcCursorItemReader<MyEntity> reader = new JdbcCursorItemReader<>();
+    reader.setDataSource(dataSource);
+    reader.setSql("SELECT * FROM my_table WHERE id >= ? AND id <= ?");
+    reader.setRowMapper(new MyRowMapper());
+    reader.setPreparedStatementSetter(new PreparedStatementSetter() {
+        @Override
+        public void setValues(PreparedStatement ps) throws SQLException {
+            ps.setInt(1, minId);
+            ps.setInt(2, maxId);
+        }
+    });
+
+    return reader;
+}
+Step 3: Configure the Master Step to Use the Partitioner
+Create a master step that utilizes the partitioner to execute the worker step across multiple partitions.
+
+java
+Copy code
+@Bean
+public Step masterStep(StepBuilderFactory stepBuilderFactory,
+                       Step workerStep,
+                       RangePartitioner partitioner,
+                       TaskExecutor taskExecutor) {
+    return stepBuilderFactory.get("masterStep")
+            .partitioner(workerStep.getName(), partitioner)
+            .step(workerStep)
+            .gridSize(10) // Set based on your needs
+            .taskExecutor(taskExecutor)
+            .build();
+}
+In this setup, the RangePartitioner creates partitions based on ID ranges. Each partition, executed by the worker step, processes a subset of the data as defined by the minId and maxId in its execution context. The JdbcCursorItemReader for each partition is configured to only read the records within the specified ID range, allowing for parallel processing of the dataset.
+
+This approach leverages Spring Batch's support for parallel processing to efficiently handle large datasets by dividing the work across multiple partitions that can be processed in parallel.
