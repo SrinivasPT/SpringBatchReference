@@ -1,0 +1,26 @@
+WITH AddressRanked AS (
+    SELECT
+        a.EmployeeId,
+        a.AddressLineOne,
+        a.AddressLineTwo,
+        a.City,
+        a.Zip,
+        ROW_NUMBER() OVER (PARTITION BY a.EmployeeId ORDER BY a.AddressId) AS rn
+    FROM Address a
+)
+SELECT
+    e.EmployeeId,
+    e.EmployeeName,
+    MAX(CASE WHEN ar.rn = 1 THEN ar.AddressLineOne END) AS Address1Line1,
+    MAX(CASE WHEN ar.rn = 1 THEN ar.AddressLineTwo END) AS Address1Line2,
+    MAX(CASE WHEN ar.rn = 1 THEN ar.City END) AS Address1City,
+    MAX(CASE WHEN ar.rn = 1 THEN ar.Zip END) AS Address1Zip,
+    MAX(CASE WHEN ar.rn = 2 THEN ar.AddressLineOne END) AS Address2Line1,
+    MAX(CASE WHEN ar.rn = 2 THEN ar.AddressLineTwo END) AS Address2Line2,
+    MAX(CASE WHEN ar.rn = 2 THEN ar.City END) AS Address2City,
+    MAX(CASE WHEN ar.rn = 2 THEN ar.Zip END) AS Address2Zip
+    -- Repeat for Address3Line1, Address3Line2, ..., Address10Zip
+FROM Employee e
+LEFT JOIN AddressRanked ar ON e.EmployeeId = ar.EmployeeId
+GROUP BY e.EmployeeId, e.EmployeeName
+ORDER BY e.EmployeeId;
