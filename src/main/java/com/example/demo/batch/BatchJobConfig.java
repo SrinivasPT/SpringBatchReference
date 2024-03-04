@@ -1,9 +1,9 @@
 package com.example.demo.batch;
 
 import com.example.demo.model.Address;
+import com.example.demo.model.EmployeeFlatRecord;
 import com.example.demo.model.EmployeeJson;
 import com.example.demo.model.EmployeeJsonUpdate;
-import com.example.demo.model.EmployeeFlatRecord;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.List;
@@ -13,13 +13,18 @@ import org.springframework.batch.core.Step;
 import org.springframework.batch.core.configuration.annotation.EnableBatchProcessing;
 import org.springframework.batch.core.configuration.annotation.JobBuilderFactory;
 import org.springframework.batch.core.configuration.annotation.StepBuilderFactory;
+import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.launch.support.RunIdIncrementer;
+import org.springframework.batch.core.partition.support.Partitioner;
 import org.springframework.batch.item.ItemProcessor;
 import org.springframework.batch.item.ItemWriter;
 import org.springframework.batch.item.database.JdbcCursorItemReader;
 import org.springframework.batch.item.database.builder.JdbcCursorItemReaderBuilder;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.TaskExecutor;
+import org.springframework.jdbc.core.ArgumentPreparedStatementSetter;
 import org.springframework.jdbc.core.BeanPropertyRowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -31,7 +36,6 @@ public class BatchJobConfig {
 
     private final JobBuilderFactory jobBuilderFactory;
     private final StepBuilderFactory stepBuilderFactory;
-
     private final DataSource dataSource;
 
     public BatchJobConfig(JobBuilderFactory jobBuilderFactory,
@@ -41,16 +45,21 @@ public class BatchJobConfig {
         this.dataSource = dataSource;
     }
 
+    // This method now requires segment information to filter data
     @Bean
-    public JdbcCursorItemReader<EmployeeFlatRecord> itemReader() {
+    @StepScope
+    public JdbcCursorItemReader<EmployeeFlatRecord> itemReader(
+        @Value("#{stepExecutionContext['segment']}") Integer segment) {
         return new JdbcCursorItemReaderBuilder<EmployeeFlatRecord>()
             .name("customerReader")
             .dataSource(dataSource)
-            .sql("SELECT * FROM VW_EmployeeRecord")
+            .sql("SELECT * FROM VW_EmployeeRecord WHERE segment = ?")
             .rowMapper(new BeanPropertyRowMapper<>(EmployeeFlatRecord.class))
             .fetchSize(1000)
+            .preparedStatementSetter(new ArgumentPreparedStatementSetter(new Object[]{segment}))
             .build();
     }
+
 
     @Bean
     public ItemProcessor<EmployeeFlatRecord, EmployeeJsonUpdate> itemProcessor() {
@@ -117,23 +126,36 @@ public class BatchJobConfig {
         };
     }
 
-
     @Bean
     public Step step1() {
         return stepBuilderFactory.get("step1")
             .<EmployeeFlatRecord, EmployeeJsonUpdate>chunk(1000)
-            .reader(itemReader())
+            .reader(itemReader(
+                null)) // Pass null because the actual value will be provided by the partitioner
             .processor(itemProcessor())
             .writer(itemWriter())
             .build();
     }
 
     @Bean
-    public Job importEmployeeJob() {
+    public Step partitionedMasterStep(TaskExecutor taskExecutor) {
+        return stepBuilderFactory.get("partitionedMasterStep")
+            .partitioner("step1", partitioner())
+            .step(step1())
+            .taskExecutor(taskExecutor)
+            .build();
+    }
+
+    @Bean
+    public Partitioner partitioner() {
+        return new ColumnRangePartitioner(dataSource);
+    }
+
+    @Bean
+    public Job importEmployeeJob(Step partitionedMasterStep) {
         return jobBuilderFactory.get("importEmployeeJob")
             .incrementer(new RunIdIncrementer())
-            .flow(step1())
-            .end()
-            .build();
+            .start(partitionedMasterStep)
+            .build(); // No need to call end() after start() for simple job configurations
     }
 }
